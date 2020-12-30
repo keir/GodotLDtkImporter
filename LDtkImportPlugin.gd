@@ -22,6 +22,7 @@ func get_import_options(preset):
 	return []
 	
 func import(source_file, save_path, options, platform_variants, gen_files):
+	print("Importing LDTK file: ", source_file)
 	importEngine = preload("ImportEngine.gd").new()
 	var ldtkFile = importEngine.load_ldtk_file(source_file)
 	if ldtkFile.error != OK:
