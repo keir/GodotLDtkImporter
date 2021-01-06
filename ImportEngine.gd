@@ -17,7 +17,7 @@ class LDtkLayer:
 	var auto_tileset_uid
 
 # A simple logging system. Change log_level as desired.
-var log_level = 'WRN'
+var log_level = 'INF'
 var log_levels = {'DBG': 0, 'INF': 1, 'WRN': 2, 'ERR': 3}
 func log_msg(lvl, msg):
 	if log_levels[lvl] >= log_levels[log_level]:
@@ -162,43 +162,87 @@ func _create_entity(entity):
 	#  2. The scene the node is found in; found in the "scene" entity field.
 	#
 	# Use the LDtk "identifier" field determine the name.
-	var nodeName = entity["__identifier"]
+	var entityIdentifier = entity["__identifier"]
 
-	# Load the scene for the entity, stored in the "scene" field.
-	var scenePath = null
+	# Pull out the _Scene and _Node values, if present.
+	var entityScenePath = null
+	var entityNodeClass = null
 	for field in entity["fieldInstances"]:
-		if field["__identifier"] == "scene":
-			scenePath = field["__value"]
-			break
-	
-	if scenePath == null:
-		log_error("Ignoring entity '%s': missing 'scene' field" % nodeName)
-		return null
+		if field["__identifier"] == "_Scene":
+			entityScenePath = field["__value"]
+		if field["__identifier"] == "_Node":
+			entityNodeClass = field["__value"]
 
-	var entityScene = load_scene(scenePath)
-	var entityNode = entityScene.instance()
-	if entityNode == null:
-		log_error("Ignoring entity '%s': couldn't be instantiated" % nodeName)
-		return null
+	# Load and instantiate the scene, if requested.
+	var entitySceneInstance = null
+	if entityScenePath != null:
+		var entityScene = load_scene(entityScenePath)
+		if entityScene == null:
+			log_error("Ignoring entity '%s': couldn't load scene %s" % [entityIdentifier, entityScenePath])
+			return null
+		entitySceneInstance = entityScene.instance()
+		# Don't try to recover entity on failure.
+		if entitySceneInstance == null:
+			log_error("Ignoring entity '%s': couldn't be instantiated from scene %s" % [entityIdentifier, entityScenePath])
+			return null
+
+	# Instantiate the node, if requested.
+	var entityNodeInstance = null
+	if entityNodeClass != null:
+		log_debug("Entity '%s': using custom node class: %s" % [entityIdentifier, entityNodeClass])
+		entityNodeInstance = ClassDB.instance(entityNodeClass)
+		# Don't try to recover entity on failure.
+		if entityNodeInstance == null:
+			log_error("Ignoring entity '%s': couldn't instantiate class %s from scene %s" % [entityIdentifier, entityNodeClass, entityScenePath])
+			return null
+
+	# Got both _Scene and _Node? Nest the scene inside the node.
+	if entitySceneInstance != null and entityNodeInstance != null:
+		log_error("Entity '%s': using both _Node and _Scene together on the same node doesn't work at the moment" % entityIdentifier)
+		# TODO: This doesn't work, and I'm not sure why.
+		#entityNodeInstance.add_child(entitySceneInstance)
+		# Just take the scene instance for now, since it's usually preferable.
+		entityNodeInstance = entitySceneInstance
 			
+	# Didn't get _Scene or _Node? Default to a Node2D.
+	if entityScenePath == null and entityNodeClass == null:
+		log_warning("Entity '%s' has no _Scene or _Node field; defaulting to Node2D" % entityIdentifier)
+		entityNodeInstance = Node2D.new()
+
+	if entityNodeInstance == null:
+		assert(entitySceneInstance)
+		entityNodeInstance = entitySceneInstance
+
+	assert(entityNodeInstance)
+
 	# Field: Name
-	entityNode.name = nodeName
+	#
+	# Note: This can be overwritten with a custom field "name" below, enabling
+	# setting the node names per instance. This just defaults to the entity
+	# identifier.
+	entityNodeInstance.set_name(entityIdentifier)
 
 	# Field: Position
-	if not entityNode.set("position", Vector2(entity["px"][0],entity["px"][1])):
-		log_debug("No previous position field on node: '%s'" % nodeName)
+	if not entityNodeInstance.set("position", Vector2(entity["px"][0],entity["px"][1])):
+		log_debug("No previous position field on node: '%s'" % entityIdentifier)
 		
 	# Field: Custom fields
 	# LDtk supports custom fields for entities. Map those to Godot properties, and set them.
 	for field in entity["fieldInstances"]:
 		# Skip known fields.
-		if field["__identifier"] == "scene":
+		if field["__identifier"] in ["_Scene", "_Node"]:
 			continue
 			
 		var fieldName = field["__identifier"]
 		var fieldValue = field["__value"]
 		var fieldType = field["__type"]
+
+		# Skip null fields.
+		if fieldValue == null:
+			log_debug("Skipping null field: %s" % fieldName)
+			continue
 		
+		log_debug("Setting %s[%s] = %s" % [entityIdentifier, fieldName, fieldValue])
 		match fieldType:
 			"Point":
 				if typeof(fieldValue) == TYPE_ARRAY:
@@ -219,12 +263,11 @@ func _create_entity(entity):
 			"Enum":
 				log_warning("Enums on entities are not properly supported; ignoring field: %s" % fieldName)
 		
-		log_debug("Setting %s[%s] = %s" % [nodeName, fieldName, fieldValue])
-		if not entityNode.set(fieldName, fieldValue):
-			log_debug("Field '%s' does not exist on node '%s'" % [fieldName, nodeName])
+		if not entityNodeInstance.set(fieldName, fieldValue):
+			log_debug("Field '%s' does not exist on node '%s'" % [fieldName, entityIdentifier])
 	
-	log_debug("Entity created: %s" % nodeName)
-	return entityNode
+	log_debug("Entity created: %s" % entityIdentifier)
+	return entityNodeInstance
 	
 func _create_layer(layer, layersDef, tilesets):
 	# Find the tiles to create for this layer.
