@@ -358,11 +358,49 @@ func _create_tile(tileId, region, tileset): # region, texture, tileset):
 	tileset.tileset.tile_set_texture(tileId, tileset.texture)
 	tileset.tileset.tile_set_region(tileId, region)
 
+
+# Godot gets cranky if there is no resource placed at expected save_path
+# location in the filesystem, even if there are genfiles created. In the case
+# of the LDtk importer, there isn't a "single" resource created, but rather a
+# series of them; so the single save_path doesn't make sense. So make an empty
+# scene at the expected save_pach (which is inside the res//.import/...
+# directory) to satisfy Godot.
+#
+# TODO: Submit upstream Godot bug about:
+#
+#  (1) Docs do NOT explain the requirement for the save_file parameter.
+#      Furthermore, the other arguments are barely documented. The required pre- and
+#      post-conditions for the import() function are not explained precisely. And to
+#      make the situation worse, it is not obvious where to look in the Godot source
+#      code to figure this out.
+#
+#  (2) Lack of error checking around user defined functions. There should be a
+#      useful error for obvious cases like the user failing to write out a file at
+#      an expected path.
+#
+func _write_empty_scene(save_path, save_extension):
+	var scene_file_path = save_path + "." + save_extension
+	log_debug("Writing empty scene to satisfy Godot: %s" % scene_file_path)
+	var scene = PackedScene.new()
+	var root_node = Node.new()
+	scene.pack(root_node)
+	return ResourceSaver.save(scene_file_path, scene)
+
+
+func _banner(message):
+	log_info("=============== %s ===============" % message)
+	
+
 func run_import(source_file, save_path, save_extension, gen_files):
+	_banner("BEGIN LDTK IMPORT")
+	assert(_write_empty_scene(save_path, save_extension) == OK)
+
+	# Must match get_save_extension() in LDtkImportPlugin.gd
 	# Load the two key parts of the level: the definitions and levels.
 	log_info("Loading file: %s" % source_file)
 	var ldtkFile = load_ldtk_file(source_file)
 	if ldtkFile.error != OK:
+		_banner("END LDTK IMPORT")
 		return ldtkFile.error
 
 	save_path = source_file.get_basename()
@@ -373,6 +411,7 @@ func run_import(source_file, save_path, save_extension, gen_files):
 		log_debug("Creating directory: %s" % tilesetPath)
 		var error = directory.make_dir_recursive(tilesetPath)
 		if error != OK:
+			_banner("END LDTK IMPORT")
 			return error
 		
 	log_debug("Loading layer definitions")
@@ -395,4 +434,5 @@ func run_import(source_file, save_path, save_extension, gen_files):
 			gen_files.append(tileset.path)
 		else:
 			log_error("Error saving: %s" % tileset.path)
+	_banner("END LDTK IMPORT")
 	return OK
